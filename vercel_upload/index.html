@@ -122,7 +122,7 @@
 <div class="container">
     <div class="header">
         <div class="badge">Unified Engine v7.5 (Enhanced Pipe-Table & Image Extraction)</div>
-        <h1>Master Slide Automation</h1>
+        <h1>Master Slide Automation <span style="font-size:12px;opacity:.6;font-weight:400">v35</span></h1>
         <p style="color: var(--muted); font-size: 14px;">① Choose the template &nbsp;→&nbsp; ② Select the DOCX &amp; parse &nbsp;→&nbsp; ③ Review &amp; generate.</p>
     </div>
 
@@ -407,6 +407,74 @@
         if (!MX_ANY_RE.test(s)) return s;
         return s.replace(/[]/g, '').replace(MX_MATH_RE, (m, b) => mxInfo(b).plain);
     }
+    // ---- Size model of a native equation (in em), so slides can be paginated / shrunk before PowerPoint lays them out ----
+    const __omMetricCache = new Map();
+    function ommlMetrics(inner) {
+        inner = String(inner || '');
+        if (__omMetricCache.has(inner)) return __omMetricCache.get(inner);
+        let res = null;
+        try {
+            const doc = new DOMParser().parseFromString('<r xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' + inner + '</r>', 'application/xml');
+            if (!doc.getElementsByTagName('parsererror').length) {
+                const kid = (n, name) => [...n.children].find(c => c.localName === name);
+                const seq = (n) => { let w = 0, h = 0; for (const c of n.children) { if (/Pr$/.test(c.localName)) continue; const r = rec(c); w += r.w; h = Math.max(h, r.h); } return { w, h: h || 1.2 }; };
+                const sub = (n, name) => { const k = kid(n, name); return k ? seq(k) : { w: 0, h: 0 }; };
+                const rec = (n) => {
+                    switch (n.localName) {
+                        case 'r': { const t = [...n.children].filter(c => c.localName === 't').map(c => c.textContent).join(''); let w = 0; for (const ch of t) w += /[ঀ-৿]/.test(ch) ? 0.7 : (/[0-9]/.test(ch) ? 0.52 : (/[+\-=<>−×±≤≥≠≈∈∠∴]/.test(ch) ? 0.85 : 0.55)); return { w, h: 1.2 }; }
+                        case 'f': { const a = sub(n, 'num'), b = sub(n, 'den'); return { w: Math.max(a.w, b.w) * 0.9 + 0.35, h: (a.h + b.h) * 0.72 + 0.1 }; }
+                        case 'rad': { const e = sub(n, 'e'), d = sub(n, 'deg'); return { w: e.w + 1.0 + d.w * 0.6, h: e.h + 0.35 }; }
+                        case 'sSup': { const b = sub(n, 'e'), u = sub(n, 'sup'); return { w: b.w + u.w * 0.7, h: Math.max(b.h, 0.55 + u.h * 0.7) }; }
+                        case 'sSub': { const b = sub(n, 'e'), u = sub(n, 'sub'); return { w: b.w + u.w * 0.7, h: b.h + 0.25 }; }
+                        case 'sSubSup': { const b = sub(n, 'e'), u = sub(n, 'sub'), v = sub(n, 'sup'); return { w: b.w + Math.max(u.w, v.w) * 0.7, h: Math.max(b.h + 0.25, 0.55 + v.h * 0.7 + 0.25) }; }
+                        case 'd': { const es = [...n.children].filter(c => c.localName === 'e').map(seq); let w = 0.8 + Math.max(0, es.length - 1) * 0.4, h = 1.2; for (const e of es) { w += e.w; h = Math.max(h, e.h); } return { w, h: h * 1.05 }; }
+                        case 'nary': { const a = sub(n, 'sub'), b = sub(n, 'sup'), e = sub(n, 'e'); return { w: 1.0 + Math.max(a.w, b.w) * 0.7 + e.w, h: Math.max(e.h, 1.7) + (a.h ? 0.5 : 0) + (b.h ? 0.5 : 0) }; }
+                        case 'func': { const a = sub(n, 'fName'), e = sub(n, 'e'); return { w: a.w + e.w, h: Math.max(a.h, e.h) }; }
+                        case 'limLow': case 'limUpp': { const e = sub(n, 'e'), l = sub(n, 'lim'); return { w: Math.max(e.w, l.w * 0.7), h: e.h + l.h * 0.7 }; }
+                        case 'acc': case 'bar': case 'groupChr': case 'borderBox': case 'box': case 'phant': { const e = sub(n, 'e'); return { w: e.w + 0.2, h: e.h + 0.3 }; }
+                        case 'm': { let w = 0, h = 0; for (const mr of n.children) { if (mr.localName !== 'mr') continue; let rw = 0, rh = 0; for (const c of mr.children) { if (c.localName !== 'e') continue; const r = seq(c); rw += r.w + 0.5; rh = Math.max(rh, r.h); } w = Math.max(w, rw); h += rh; } return { w, h: h || 1.2 }; }
+                        case 'eqArr': { let w = 0, h = 0; for (const c of n.children) { if (c.localName !== 'e') continue; const r = seq(c); w = Math.max(w, r.w); h += r.h; } return { w, h: h || 1.2 }; }
+                        case 'oMath': case 'oMathPara': case 'e': case 'num': case 'den': case 'sup': case 'sub': case 'deg': case 'lim': case 'fName': return seq(n);
+                        default: return /Pr$/.test(n.localName) ? { w: 0, h: 0 } : seq(n);
+                    }
+                };
+                res = seq(doc.documentElement);
+            }
+        } catch (e) { res = null; }
+        if (!res) res = { w: Math.max(1, inner.replace(/<[^>]+>/g, '').length * 0.55), h: 1.2 };
+        __omMetricCache.set(inner, res); return res;
+    }
+    // size (pt) an equation must be drawn at so that it is not wider than maxW inches (never below 12 pt)
+    function mathFitSize(inner, size, maxW) {
+        const w = ommlMetrics(inner).w * size / 72;
+        return w > maxW * 0.96 ? Math.max(12, Math.floor(size * maxW * 0.96 / w)) : size;
+    }
+    // height (in) of one line made of text / math segments
+    function mathLineH(segs, size, maxW) {
+        segs = Array.isArray(segs) ? segs : [];
+        if (!segs.some(sg => sg && sg.type === 'math')) return estHeight(segs.map(sg => String((sg && sg.content) || '')).join('') || ' ', maxW, size, 1.3, false);
+        let tw = 0, mw = 0, mh = 0;
+        for (const sg of segs) {
+            if (!sg) continue;
+            if (sg.type === 'math') { const s2 = mathFitSize(sg.content, size, maxW), m = ommlMetrics(sg.content); mw += m.w * s2 / 72; mh = Math.max(mh, m.h * s2 / 72); }
+            else tw += String(sg.content || '').length * size / 72 * 0.55;
+        }
+        const rows = Math.max(1, Math.ceil((tw + mw) / maxW));
+        const base = size / 72 * 1.25;
+        return rows * base + Math.max(0, mh * 1.1 - base) + 0.05;
+    }
+    // extra height (in) the equations of a marker string add on top of its plain-text measurement
+    function mxExtraH(s, fSize, mult) {
+        s = String(s == null ? '' : s);
+        if (!MX_ANY_RE.test(s)) return 0;
+        let extra = 0;
+        for (const ln of s.split('\n')) {
+            let mh = 0;
+            ln.replace(MX_MATH_RE, (m, b) => { mh = Math.max(mh, ommlMetrics(mxInfo(b).inner).h); return m; });
+            if (mh) extra += Math.max(0, mh * 1.1 - 1.25 * (mult || 1.2)) * fSize / 72;
+        }
+        return extra;
+    }
     // how many text lines carry a stacked (fraction / root / sum ...) equation: those lines are taller
     function mxTallLines(s) {
         s = String(s == null ? '' : s);
@@ -417,8 +485,8 @@
     }
     const estHeight = (text, width, fSize, lineSpacingMult, isBox = false, extraSafety = 1) => {
         if (!text) return 0;
-        const __tall = mxTallLines(text);
-        if (__tall) return estHeight(mxVis(text), width, fSize, lineSpacingMult, isBox, extraSafety) + __tall * (fSize / 72) * 0.9;
+        const __tall = mxExtraH(text, fSize, lineSpacingMult);
+        if (__tall) return estHeight(mxVis(text), width, fSize, lineSpacingMult, isBox, extraSafety) + __tall;
         if (MX_ANY_RE.test(String(text))) text = mxVis(text);
         let str = text.toString().replace(/\\n/g, '\n').trim().replace(/\n{3,}/g, '\n\n');
         if (!str) return 0;
@@ -565,7 +633,7 @@
         return m ? { n:normalizeDigits(m[1]), text:cleanSpaces(m[2]) } : null;
     }
     function isMCQOption(line) {
-        return /^(?:\([কখগঘ]\)|[কখগঘ][.)])\s*/.test(cleanSpaces(line));
+        return /^(?:\([কখগঘঙ]\)|[কখগঘঙ][.)])\s*/.test(cleanSpaces(line));
     }
     function stripAnswerPrefix(s) {
         return cleanSpaces((s||'').replace(/^উত্তর\s*[:：.]?\s*/i,''));
@@ -697,7 +765,8 @@
     // Equation anchoring is handled by tokenizeMathInDocx() plus
     // restoreMathTokensInParas(); no post-conversion text search is used.
 
-    function convertOmmlForPptx(ommlXml,fontSizeHundredths){
+    function convertOmmlForPptx(ommlXml,fontSizeHundredths,colorHex){
+        const COL=String(colorHex||'FFFFFF').replace('#','').toUpperCase();
         const esc=v=>String(v||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
 
         function findMathRunEnd(xml,openEnd){
@@ -766,7 +835,7 @@
                 // Recursively convert nested m:r after stripping this run's own
                 // Word-only w:rPr, so fractions and radicals are fully covered.
                 body=transformMathRuns(body);
-                const aRPr=`<a:rPr sz="${size}"${bold}${italic}><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:latin typeface="${esc(latin)}"/><a:ea typeface="${esc(latin)}"/><a:cs typeface="${esc(csFace)}"/></a:rPr>`;
+                const aRPr=`<a:rPr sz="${size}"${bold}${italic}><a:solidFill><a:srgbClr val="${COL}"/></a:solidFill><a:latin typeface="${esc(latin)}"/><a:ea typeface="${esc(latin)}"/><a:cs typeface="${esc(csFace)}"/></a:rPr>`;
                 out+=openTag+aRPr+body+'</m:r>';
                 pos=end;
             }
@@ -778,7 +847,7 @@
         // Word writes those as <w:rPr> (no colour) which PowerPoint ignores, so the
         // bar/slash drew in default BLACK on the dark slide. Give every such element
         // an explicit white Kalpurush <a:rPr>.
-        const ctrl=`<m:ctrlPr><a:rPr sz="${fontSizeHundredths||2400}"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:latin typeface="Kalpurush"/><a:ea typeface="Kalpurush"/><a:cs typeface="Kalpurush"/></a:rPr></m:ctrlPr>`;
+        const ctrl=`<m:ctrlPr><a:rPr sz="${fontSizeHundredths||2400}"><a:solidFill><a:srgbClr val="${COL}"/></a:solidFill><a:latin typeface="Kalpurush"/><a:ea typeface="Kalpurush"/><a:cs typeface="Kalpurush"/></a:rPr></m:ctrlPr>`;
         let out=transformMathRuns(String(ommlXml||''));
         out=out.replace(/<m:ctrlPr\s*\/>|<m:ctrlPr>[\s\S]*?<\/m:ctrlPr>/g,ctrl);
         const structs=['f','d','nary','rad','sSub','sSup','sSubSup','sPre','func','acc','bar','limLow','limUpp','eqArr','groupChr','box','borderBox','m','phant'];
@@ -926,14 +995,14 @@
         // a14 on mc:Choice itself, as specified by DrawingML markup
         // compatibility. The native choice keeps the original editable OMML;
         // the fallback is linear Unicode math, never LaTeX source.
-        const native=`<a14:m xmlns:m="${M_NS}" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><m:oMathPara>${omath}</m:oMathPara></a14:m>`;
+        const native=`<a14:m xmlns:m="${M_NS}" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><m:oMathPara><m:oMathParaPr><m:jc m:val="left"/></m:oMathParaPr>${omath}</m:oMathPara></a14:m>`;
         const fallback=String(inj.fallbackText||'')
             .replace(/\s*\n\s*/g,' ')
             .replace(/\(([^()]*)\)\/\(([^()]*)\)/g,'$1⁄$2')
             .replace(/_\(([^)]*)\)|_([A-Za-z0-9]+)/g,(_,a,b)=>{const t=a||b;const m=[...t].map(c=>SUB_CH[c]);return m.every(Boolean)?m.join(''):`₍${t}₎`;})
             .replace(/\^\(([^)]*)\)|\^([A-Za-z0-9]+)/g,(_,a,b)=>{const t=a||b;const m=[...t].map(c=>SUP_CH[c]);return m.every(Boolean)?m.join(''):`⁽${t}⁾`;});
         const fallbackSize=String(inj.fontSizeHundredths||2400);
-        const fallbackRun=fallback?`<a:r><a:rPr lang="en-US" sz="${fallbackSize}"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:latin typeface="Cambria Math"/><a:ea typeface="Kalpurush"/><a:cs typeface="Kalpurush"/></a:rPr><a:t xml:space="preserve">${escXmlText(fallback)}</a:t></a:r>`:'';
+        const fallbackRun=fallback?`<a:r><a:rPr lang="en-US" sz="${fallbackSize}"><a:solidFill><a:srgbClr val="${String(inj.color||'FFFFFF').replace('#','')}"/></a:solidFill><a:latin typeface="Cambria Math"/><a:ea typeface="Kalpurush"/><a:cs typeface="Kalpurush"/></a:rPr><a:t xml:space="preserve">${escXmlText(fallback)}</a:t></a:r>`:'';
         return `<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="a14" xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main">${native}</mc:Choice><mc:Fallback>${fallbackRun}</mc:Fallback></mc:AlternateContent>`;
     }
     function escXmlText(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
@@ -1007,6 +1076,13 @@
                 if(!rel.length)return shapeXml;
                 const patched=wrapShapeForInlineMath(shapeXml,rel);
                 if(patched!==shapeXml)replaced+=rel.length;
+                return patched;
+            });
+            xml=xml.replace(/<p:graphicFrame\b[\s\S]*?<\/p:graphicFrame>/gi,frameXml=>{
+                const rel=bySlide[slideIndex].filter(i=>frameXml.includes(i.marker));
+                if(!rel.length)return frameXml;
+                const patched=wrapShapeForInlineMath(frameXml,rel);
+                if(patched!==frameXml)replaced+=rel.length;
                 return patched;
             });
             xml=enforceKalpurushFonts(xml);
@@ -1337,7 +1413,7 @@
 
         function splitMCQOptions(s) {
             const x=normalize(s);
-            const re=/(?:^|\s)(?:\(([কখগঘ])\)|([কখগঘ])[.)])\s*/g;
+            const re=/(?:^|\s)(?:\(([কখগঘঙ])\)|([কখগঘঙ])[.)])\s*/g;
             const hits=[];
             let m;
             while((m=re.exec(x))!==null) hits.push({label:m[1]||m[2], index:m.index, end:re.lastIndex});
@@ -1354,10 +1430,10 @@
 
         function parseMCQAnswer(s) {
             const x=String(s||'').replace(/\u00A0/g,' ').replace(/\s+/g,' ').trim();
-            const m=x.match(/উত্তর\s*[:：.ঃ-]?\s*\(?\s*([কখগঘABCD])\s*\)?/i);
+            const m=x.match(/উত্তর\s*[:：.ঃ-]?\s*\(?\s*([কখগঘঙABCDE])\s*\)?/i);
             if(!m) return -1;
             const v=m[1].toUpperCase();
-            const map={ক:0,খ:1,গ:2,ঘ:3,A:0,B:1,C:2,D:3};
+            const map={ক:0,খ:1,গ:2,ঘ:3,ঙ:4,A:0,B:1,C:2,D:3,E:4};
             return Object.prototype.hasOwnProperty.call(map,v) ? map[v] : -1;
         }
 
@@ -1608,7 +1684,7 @@
                         }
                         const z=normalize(paras[k].text);
                         if(!z){ k++; continue; }
-                        if(opts.length===0 && /^(?:\(?[কখগঘ]\)?[.)]?\s*)+$/.test(z)){ optEvents.push({t:'lab', labels:[...z.matchAll(/[কখগঘ]/g)].map(m=>'কখগঘ'.indexOf(m[0]))}); k++; continue; }
+                        if(opts.length===0 && /^(?:\(?[কখগঘঙ]\)?[.)]?\s*)+$/.test(z)){ optEvents.push({t:'lab', labels:[...z.matchAll(/[কখগঘঙ]/g)].map(m=>'কখগঘঙ'.indexOf(m[0]))}); k++; continue; }
                         
                         if(/^উত্তর\s*[:：.ঃ-]?/i.test(z)){
                             const a=parseMCQAnswer(z);
@@ -1620,7 +1696,7 @@
                         if(isQuestionLine(z) || isNumberedMCQQuestion(z) || /^(?:MCQ|বহুনির্বাচনি)/i.test(z) || /^CQ$/i.test(z) || /^A4$/i.test(z)) break;
 
                         let optionText=z;
-                        const inlineAnswer = optionText.match(/(?:^|\s)উত্তর\s*[:：.ঃ-]?\s*(?:\()?([কখগঘ]|[ABCD])\s*(?:\))?\s*$/i);
+                        const inlineAnswer = optionText.match(/(?:^|\s)উত্তর\s*[:：.ঃ-]?\s*(?:\()?([কখগঘঙ]|[ABCDE])\s*(?:\))?\s*$/i);
                         if(inlineAnswer){
                             const a=parseMCQAnswer(inlineAnswer[0]);
                             if(a>=0) answer=a;
@@ -1664,7 +1740,7 @@
                         if(got.filter(Boolean).length>=2){ imgOpts=got; qImage = imgQ[0] || ''; }
                     }
                     if(opts.length>=2 || imgOpts){
-                        const normalizedOpts=imgOpts ? [0,1,2,3].map(()=>({text:''})) : opts.slice(0,4);
+                        const normalizedOpts=imgOpts ? [0,1,2,3].map(()=>({text:''})) : opts.slice(0,5);
                         const correct=answer;
                         let mcqImg = qImage || mcqPendingImage;
                         if (mcqImg && mcqScenario) mcqScenImg = { scn: mcqScenario, img: mcqImg };
@@ -2092,10 +2168,11 @@
                 'options_1_answer','options_1_is_correct','options_1_image','options_1_audio','options_1_video',
                 'options_2_answer','options_2_is_correct','options_2_image','options_2_audio','options_2_video',
                 'options_3_answer','options_3_is_correct','options_3_image','options_3_audio','options_3_video',
-                'options_4_answer','options_4_is_correct','options_4_image','options_4_audio','options_4_video','topic','explanation','explanation_images'].join('\t'));
+                'options_4_answer','options_4_is_correct','options_4_image','options_4_audio','options_4_video',
+                'options_5_answer','options_5_is_correct','options_5_image','options_5_audio','options_5_video','topic','explanation','explanation_images'].join('\t'));
             for (const q of model.mcqRows) {
                 const vals=[q.si,q.board,q.type,q.title,q.image||''];
-                for(let j=0;j<4;j++){
+                for(let j=0;j<5;j++){
                     vals.push(q.options[j]||'', (q.correct>=0 && j===q.correct) ? '1':'0', (q.optImages&&q.optImages[j])||'', '', '');
                 }
                 vals.push(q.topic||0);
@@ -2325,7 +2402,7 @@
     // extraction. This keeps equations anchored to their source paragraph and
     // removes the old fuzzy-text search that could move unmatched equations to
     // the beginning of the deck.
-    async function tokenizeMathInDocx(arrayBuffer) {
+    async function tokenizeMathInDocx(arrayBuffer, includeTables) {
         const zip = await JSZip.loadAsync(arrayBuffer);
         const docFile = zip.file('word/document.xml');
         if (!docFile) return { arrayBuffer, tokenMap: Object.create(null) };
@@ -2344,7 +2421,7 @@
         const blockRe = /<m:oMathPara\b[\s\S]*?<\/m:oMathPara>|<m:oMath\b[\s\S]*?<\/m:oMath>/g;
         const paraRe = /<w:p\b[^>]*>[\s\S]*?<\/w:p>/g;
         xml = xml.replace(paraRe, (para, offset) => {
-            if (inTable(offset)) return para; // tables already use their cell model
+            if (!includeTables && inTable(offset)) return para; // Existing process: tables use their cell model
             return para.replace(blockRe, block => {
                 const isPara = /^<m:oMathPara\b/i.test(block);
                 const equations = isPara
@@ -2397,6 +2474,25 @@
                 n++;
                 return (e.lines.length ? e.lines : [[]]).map(row => row.map(sg => sg.type === 'math' ? mxEncodeMath(sg.content) : String(sg.content || '')).join('')).join(' ');
             });
+        }
+        return n;
+    }
+
+    // Master Book: equations inside table cells become native equations too (inline markers in the cell text, drawn as real equations).
+    function mbExpandTableMath(paras, tokenMap) {
+        let n = 0;
+        for (const p of paras) {
+            const t = String(p.text || '');
+            if (!t.startsWith('___TABLE:') || !/___OMMLTOKEN_\d{6}___/.test(t)) continue;
+            let model; try { model = JSON.parse(t.slice(9, -3)); } catch (e) { continue; }
+            for (const row of model.rows) for (const cell of row) {
+                cell.text = String(cell.text || '').replace(/___OMMLTOKEN_\d{6}___/g, tok => {
+                    const e = tokenMap[tok]; if (!e) return tok;
+                    n++;
+                    return (e.lines.length ? e.lines : [[]]).map(r => r.map(sg => sg.type === 'math' ? mxEncodeMath(sg.content) : String(sg.content || '')).join('')).join('\n');
+                });
+            }
+            p.text = '___TABLE:' + JSON.stringify(model) + '___';
         }
         return n;
     }
@@ -2477,12 +2573,65 @@
         { name: 'সৃজনশীল প্রশ্ন', kind: 'cq' },
         { name: 'বহুনির্বাচনি প্রশ্ন', kind: 'mcq' },
         { name: 'নিজেকে যাচাই করি', kind: 'skip' },
-        { name: 'মডেল টেস্ট', kind: 'skip' }
+        { name: 'মডেল টেস্ট', kind: 'skip' },
+        { name: 'নিজে করো', kind: 'body' },
+        { name: 'চিন্তা করো', kind: 'body' },
+        { name: 'অতিরিক্ত বহুনির্বাচনি প্রশ্নোত্তর', kind: 'mcq' },
+        { name: 'এক্সট্রা ইনফো', kind: 'body' },
+        { name: 'পাঠ পরিচিতি', kind: 'body' },
+        { name: 'উত্তরমালা', kind: 'skip' },
+        { name: 'চরিত্র বিশ্লেষণ', kind: 'body' },
+        { name: 'অনুশীলনীর সৃজনশীল প্রশ্নোত্তর', kind: 'cq' },
+        { name: 'বহুনির্বাচনি প্রশ্নোত্তর', kind: 'mcq' },
+        { name: 'মনে রাখবে', kind: 'body' },
+        { name: 'জ্ঞান', kind: 'body' },
+        { name: 'লেখক পরিচিতি', kind: 'body' },
+        { name: 'মূল বইয়ের কন্টেন্ট', kind: 'body' },
+        { name: 'অতিরিক্ত সৃজনশীল প্রশ্নোত্তর', kind: 'cq' },
+        { name: 'কঠিন লাইনের সহজ ব্যাখ্যা', kind: 'body' },
+        { name: 'অধ্যায়ভিত্তিক সাজেশন', kind: 'body' },
+        { name: 'অধ্যায়ের গুরুত্বপূর্ণ বহুনির্বাচনি প্রশ্নোত্তর', kind: 'mcq' },
+        { name: 'কুইক হ্যাকস্‌', kind: 'body' },
+        { name: 'গাণিতিক সমস্যা', kind: 'body' },
+        { name: 'কুইক রিভিশন', kind: 'body' },
+        { name: 'সতর্কতা', kind: 'body' },
+        { name: 'জেনে রাখো', kind: 'body' },
+        { name: 'বিগত বছরের বোর্ড প্রশ্ন', kind: 'body' },
+        { name: 'শব্দার্থ ও টীকা', kind: 'body' },
+        { name: 'কবি পরিচিতি', kind: 'body' },
+        { name: 'অনুশীলনীর বহুনির্বাচনি প্রশ্নোত্তর', kind: 'mcq' },
+        { name: 'এডমিশন প্রশ্ন ব্যাংক', kind: 'body' }
     ];
     const MB_HEADING_MIN_HALFPT = 22;   // 11 pt and above = heading
     const MB_BAR_MIN_HALFPT = 24;       // 12 pt and above (and every sticker) = header-bar heading; 11 pt = sub-heading under it
     const MB_HEADING_MAX_CHARS = 120;   // a "heading" longer than this is really a body paragraph
     const MB_STICKER_MIN_IN = 4.5, MB_STICKER_MAX_H_IN = 0.9, MB_BANNER_MIN_H_IN = 0.55;
+    // All Master Book sticker pictures (59): 128-bit difference-hash of each, so a sticker is recognised wherever it appears (inline, floating, next to text) and is never drawn onto a slide.
+    const MB_STICKER_HASHES = ["c800cb00cb88c8acc8accc8ccd08cc00", "c800ca00ca88cbb8c9b8ca98ca90c800", "8000c000a814655aed4a640820000000", "000020003000d8009800080008000000", "c000d240d2509554935cb306a182a002", "60c0e0d8e598ed88b588af1883108300", "40c0e0c8e588ed88f588ad0883008300", "00000000000000004000400000000000", "0000000000004000c8cc4cccc0008000", "0000000040008000c000c00000000000", "800088024d914cb14f214d9188928000", "00002000a000e000e000e00000000000", "0000000000008000888988cd80008000", "00000000c00090009000100010000000", "00005000d000a8009800a80020002000", "00000000e000b000b000b00020000000", "a0009020992c89149ba4912c9000a002", "00002000200060004000400000000000", "d000ce208a388a588a788aa88e008000", "00000000400000000000400040000000", "00000000600060004000600000000000", "880088024c014e814d814f2188028000", "0000000000003000a000300020000000", "000000004000a000a000800000000000", "000010009200dc009c000c0000000000", "60c0e0d8e598ed88b598af1883108700", "00001000100048004400300030000000", "000008008800c800c800880000000000", "000000000000000009910991a0000000", "0000000000000000e8ccecccc0000000", "00001800aa008a008a000a000a000000", "000000000000b0009000d00050000000", "8000800080008000c0004e67c0008000", "000000000000000048cc4ccc40000000", "000040004000c0008000c00040000000", "0000000040003000b000600040000000", "60c0e0d8e598ed98b588af1883108300", "8000c000c000c89d0000000000000000", "000060006800c800c800480000000000", "a000d30091ac92a492acd5b4d200a000", "00000000a000c000c000800000000000", "00000000100098001c00540010000000", "00004000400040004000000000000000", "0000400088008800c800c80000000000", "0000000020006000a000200000000000", "c81088148d2c9d6c9cac8d2c88008800", "00001000d000e000d800a80020002000", "00000000000080008ccc8eec80008000", "00001000380048005800680008000000", "00000000a000a000a000a00020000000", "00000000400040004000000000000000", "0000000000008000c88ccccc80008000", "00000000400040000000400000000000", "000000004000c0004000400000000000", "000050005800a400a4006c0044000000", "60c0e0c8e588ed88f588ad0883008300", "0000000050009000d000100020000000", "00000000000028002000200020000000", "000000002000a000a000200020000000"];
+    const MB_STICKER_ARS = [4.87, 4.87, 5.31, 17.69, 4.91, 2.59, 2.59, 17.69, 20.13, 17.69, 4.4, 17.69, 20.13, 17.69, 17.69, 17.69, 4.51, 17.69, 3.2, 17.69, 17.65, 4.4, 17.69, 17.69, 17.69, 2.59, 17.69, 17.69, 20.13, 20.13, 17.69, 17.69, 20.06, 20.13, 17.69, 17.69, 2.59, 20.13, 17.69, 4.83, 17.69, 17.69, 17.65, 17.69, 17.69, 3.91, 17.69, 20.13, 17.65, 17.69, 17.65, 20.27, 17.65, 17.69, 17.69, 2.59, 17.69, 17.69, 17.69];   // aspect ratio of each sticker: a picture only counts as that sticker if its shape matches too
+    const MB_STICKER_MIN_AR = 2.07;
+    async function mbIsStickerImage(dataUrl) {
+        try {
+            if (!dataUrl) return false;
+            const img = await new Promise(res => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = dataUrl; });
+            if (!img) return false;
+            const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+            if (!w || !h || w / h < MB_STICKER_MIN_AR) return false;
+            const c = document.createElement('canvas'); c.width = 17; c.height = 8;
+            const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, 17, 8); x.drawImage(img, 0, 0, 17, 8);
+            const d = x.getImageData(0, 0, 17, 8).data, g = i => .299 * d[i] + .587 * d[i + 1] + .114 * d[i + 2];
+            let bits = '';
+            for (let yy = 0; yy < 8; yy++) for (let xx = 0; xx < 16; xx++) bits += g((yy * 17 + xx) * 4) > g((yy * 17 + xx + 1) * 4) ? '1' : '0';
+            for (let si = 0; si < MB_STICKER_HASHES.length; si++) {
+                if (Math.abs((w / h) / MB_STICKER_ARS[si] - 1) > 0.3) continue;   // same sticker may be cropped a little differently in another file
+                const hx = MB_STICKER_HASHES[si];
+                let diff = 0;
+                for (let k = 0; k < 32; k++) { let v = parseInt(hx[k], 16) ^ parseInt(bits.slice(k * 4, k * 4 + 4), 2); while (v) { diff += v & 1; v >>= 1; } }
+                if (diff <= 24) return true;
+            }
+        } catch (e) {}
+        return false;
+    }
 
     const mbCh = (el, n) => el ? [...el.childNodes].filter(c => c.nodeType === 1 && c.localName === n) : [];
     const mbVal = el => el ? (el.getAttributeNS(MB_W, 'val') ?? el.getAttribute('w:val')) : null;
@@ -2788,7 +2937,7 @@
             if (cells.length) { rows.push(cells); if (ri === 0) firstRowBold = anyText && boldAll; }
         });
         if (model && model.rows.length === rows.length) {
-            rows.forEach((row, r) => { const mr = model.rows[r]; if (mr.length !== row.length) return; row.forEach((cell, c) => { if (mr[c].hasMath && mr[c].text) cell.text = mr[c].text; }); });
+            rows.forEach((row, r) => { const mr = model.rows[r]; if (mr.length !== row.length) return; row.forEach((cell, c) => { if (mr[c].hasMath && mr[c].text && !/___OMMLTOKEN_\d{6}___/.test(cell.text)) cell.text = mr[c].text; }); });
         }
         if (!rows.length) return null;
         const span = row => row.reduce((s, c) => s + c.colspan, 0);
@@ -2811,12 +2960,35 @@
         const r = await __mbTess.recognize(canvas);
         return r.data.text;
     }
+    // A question that is written as a picture (dark text on white): redraw it as gold text on a transparent background, so it looks like the gold question sub-heading.
+    async function mbGoldImage(dataUrl) {
+        try {
+            const img = await new Promise(res => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = dataUrl; });
+            if (!img) return dataUrl;
+            const w = img.naturalWidth, h = img.naturalHeight;
+            const c = document.createElement('canvas'); c.width = w; c.height = h;
+            const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, w, h); x.drawImage(img, 0, 0);
+            const d = x.getImageData(0, 0, w, h), a = d.data;
+            for (let i = 0; i < a.length; i += 4) {
+                const lum = .299 * a[i] + .587 * a[i + 1] + .114 * a[i + 2];
+                const al = Math.max(0, Math.min(255, Math.round((235 - lum) * 255 / 235)));
+                a[i] = 255; a[i + 1] = 192; a[i + 2] = 0; a[i + 3] = al;
+            }
+            x.putImageData(d, 0, 0);
+            return c.toDataURL('image/png');
+        } catch (e) { return dataUrl; }
+    }
     async function mbReadSticker(dataUrl) {
         const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('sticker image not readable')); i.src = dataUrl; });
-        const cut = Math.round(img.naturalWidth * 0.07);                 // drop the round icon on the left
-        const c = document.createElement('canvas'); c.width = img.naturalWidth - cut + 40; c.height = img.naturalHeight + 20;
-        const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(img, cut, 0, img.naturalWidth - cut, img.naturalHeight, 20, 10, img.naturalWidth - cut, img.naturalHeight);
-        return String(await mbOcr(c) || '').replace(/\s+/g, ' ').trim();
+        let out = '';
+        for (const frac of [0.07, 0.095, 0.05]) {     // drop the round icon on the left; retry with other crops if nothing readable came out
+            const cut = Math.round(img.naturalWidth * frac);
+            const c = document.createElement('canvas'); c.width = img.naturalWidth - cut + 40; c.height = img.naturalHeight + 20;
+            const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(img, cut, 0, img.naturalWidth - cut, img.naturalHeight, 20, 10, img.naturalWidth - cut, img.naturalHeight);
+            out = String(await mbOcr(c) || '').replace(/\s+/g, ' ').trim();
+            if (mbBn(out).length >= 3) break;
+        }
+        return out;
     }
     const mbBn = s => String(s || '').replace(/[^ঀ-৿]/g, '').replace(/[‌‍]/g, '');
     function mbDice(a, b) {
@@ -2849,19 +3021,24 @@
                 if (el.localName !== 'p') continue;
                 const info = mbReadParagraph(el, ctx);
                 const text = mbCleanLines(info.text);
-                const sticker = !text && info.images.length === 1 && info.images[0].inline && !info.boxes.length &&
+                // a sticker picture (recognised by its look, wherever it sits) is never put on a slide as an image
+                const imgData = [];
+                for (const im of info.images) { const d = await mbImageData(ctx, im.rid); imgData.push({ im, d, st: d ? await mbIsStickerImage(d) : false }); }
+                const sizeSticker = !text && info.images.length === 1 && info.images[0].inline && !info.boxes.length &&
                     info.images[0].cx / 914400 >= MB_STICKER_MIN_IN && info.images[0].cy / 914400 <= MB_STICKER_MAX_H_IN;
-                if (sticker) {
-                    events.push({ type: 'sticker', data: await mbImageData(ctx, info.images[0].rid), hIn: info.images[0].cy / 914400 });
+                const hashSticker = !text && !info.boxes.length && imgData.length >= 1 && imgData.every(x => x.st);
+                if (sizeSticker || hashSticker) {
+                    const first = imgData[0];
+                    events.push({ type: 'sticker', data: first.d, hIn: first.im.cy / 914400, ar: first.im.cx / Math.max(1, first.im.cy), unsure: !hashSticker, para: first.d ? { text: '___IMAGE:' + first.d + '___', bold: false, blank: false, isMedia: true } : null });
                     continue;
                 }
                 for (const g of (info.groups || [])) {
                     const d = await mbRenderGroup(g, ctx, tokenMap);
                     if (d) { events.push({ type: 'image', para: { text: '___IMAGE:' + d + '___', bold: false, blank: false, isMedia: true } }); figuresDrawn++; }
                 }
-                for (const im of info.images) {
-                    const d = await mbImageData(ctx, im.rid);
-                    if (d) events.push({ type: 'image', para: { text: '___IMAGE:' + d + '___', bold: false, blank: false, isMedia: true } });
+                for (const x of imgData) {
+                    if (x.st) continue;     // sticker picture next to other content: dropped, never drawn on a slide
+                    if (x.d) events.push({ type: 'image', para: { text: '___IMAGE:' + x.d + '___', bold: false, blank: false, isMedia: true } });
                 }
                 if (!text && info.boxes.length) { for (const b of info.boxes) events.push({ type: 'title', text: b }); continue; }
                 if (!text) continue;
@@ -2886,22 +3063,29 @@
                 let ocr = '';
                 try { ocr = ev.data ? await mbReadSticker(ev.data) : ''; }
                 catch (e) { if (/OCR library/.test(e.message)) throw e; ocr = ''; }
-                const m = mbMatchSection(ocr);
+                let m = mbMatchSection(ocr);
+                if (ev.unsure && !m && !(ev.hIn >= MB_BANNER_MIN_H_IN && ev.ar >= 8)) {   // wide picture that is not one of the known stickers and whose text is not a known section: it is a figure / formula picture, keep it as content
+                    stickerNo--; stats.stickers--;
+                    if (ev.para && !skipping) { if (ev.hIn <= 0.9 && ev.data) ev.para = { text: '___IMAGE:' + await mbGoldImage(ev.data) + '___', bold: false, blank: false, isMedia: true }; if (lastKind === 'body' || lastKind === null) { stats.images++; pendingHead = false; } paras.push(ev.para); }
+                    continue;
+                }
                 const isBanner = ev.hIn >= MB_BANNER_MIN_H_IN || (stickerNo === 1 && !m);
                 if (isBanner) { logFn('🏷 Sticker ' + stickerNo + ' = chapter banner (not used as a heading; the chapter name comes from the file name).', 'ok'); continue; }
+                const wasSkipping = skipping;
                 qa = ''; pendingHead = false; secIsQ = /প্রশ্ন/.test(m ? m.sec.name : ocr);
+                if (m && m.sec.name === 'উত্তরমালা' && !wasSkipping) m = { ...m, sec: { name: m.sec.name, kind: 'body' } };   // answer key of a section that is kept -> kept under its own heading
                 if (m && m.sec.kind === 'skip') { skipping = true; logFn('⏭ Sticker ' + stickerNo + ' "' + m.sec.name + '" – this section is not used and is skipped.', 'ok'); continue; }
                 skipping = false;
                 if (m) logFn('🏷 Sticker ' + stickerNo + ' → ' + m.sec.name + ' (read as "' + ocr + '")', 'ok');
-                else logFn('🏷 Sticker ' + stickerNo + ' not in the known list – used as a heading exactly as read: "' + ocr + '"', 'warn');
+                else logFn('🏷 Sticker ' + stickerNo + ' not recognised (read as "' + ocr + '") – no heading is made from it and it is not drawn', 'warn');
                 if (m && m.sec.kind === 'mcq') { marker('MCQ'); lastKind = 'mcq'; }
                 else if (m && m.sec.kind === 'cq') { marker('CQ'); lastKind = 'cq'; }
-                else { openBody(); const nm = m ? m.sec.name : ocr; if (nm) setHeading(nm); }
+                else { openBody(); if (m) setHeading(m.sec.name); }   // a sticker whose words could not be read confidently never becomes a (garbled) heading
                 continue;
             }
             if (skipping) {
                 stats.skipped++;
-                for (const m of String(ev.text || '').matchAll(/___OMMLTOKEN_\d{6}___/g)) skippedTokens.add(m[0]);
+                for (const m of String(ev.text || (ev.para && ev.para.text) || '').matchAll(/___OMMLTOKEN_\d{6}___/g)) skippedTokens.add(m[0]);
                 continue;
             }
             if (ev.type === 'title') {   // text-box sub-section bar, e.g. "জ্ঞানমূলক প্রশ্নোত্তর"
@@ -2950,18 +3134,24 @@
                 continue;
             }
             // a bold, numbered question of a question-answer section ("প্রশ্ন-০১: …", "১। …") is a sub-heading; its answer ("সমাধান: …") stays body text
-            if (ev.size < MB_HEADING_MIN_HALFPT && ev.btext && ev.btext.charAt(0) === MX_B_ON &&
+            if ((ev.size < MB_HEADING_MIN_HALFPT || ev.text.includes('\n')) && (ev.bold || (ev.btext && ev.btext.includes(MX_B_ON))) &&
                 /^(?:প্রশ্ন\s*[-–—]\s*[০-৯\d]+\s*[:।.)]|[০-৯]+\s*[।)]\s*\S|[০-৯]+\s*\.\s+\S)/.test(ev.text) && (secIsQ || /^প্রশ্ন\s*[-–—]/.test(ev.text))) {
                 const nl = ev.text.indexOf('\n');
-                const qLine = (nl > 0 ? ev.text.slice(0, nl) : ev.text).trim();
-                const restTxt = nl > 0 ? ev.text.slice(nl + 1).trim() : '';
+                let qLine = (nl > 0 ? ev.text.slice(0, nl) : ev.text).trim();
+                let restTxt = nl > 0 ? ev.text.slice(nl + 1).trim() : '';
+                while (restTxt) {   // the exam reference "[ঢা. বো. '১১]" on the next line belongs to the question
+                    const nl2 = restTxt.indexOf('\n'), l2 = (nl2 > 0 ? restTxt.slice(0, nl2) : restTxt).trim();
+                    if (!/^\[[^\]]*\]$/.test(l2)) break;
+                    qLine += ' ' + l2; restTxt = nl2 > 0 ? restTxt.slice(nl2 + 1).trim() : '';
+                }
                 setHeading(qLine, 'sub'); paras[paras.length - 1].isQHead = true;
                 if (restTxt) { paras.push({ text: restTxt, bold: false, blank: false, isMedia: false, isBullet: false }); stats.body++; pendingHead = false; }
                 continue;
             }
             const isHead = ev.size >= MB_HEADING_MIN_HALFPT && !ev.text.includes('\n');
-            if (isHead && ev.text.length > MB_HEADING_MAX_CHARS) {
-                logFn('⚠ A ' + (ev.size / 2) + ' pt paragraph is too long to be a heading (' + ev.text.length + ' characters) – kept as body text: "' + ev.text.slice(0, 40) + '…"', 'warn');
+            const headLen = ev.text.replace(/___OMMLTOKEN_\d{6}___/g, '⋯⋯').length;   // an equation counts as 2 characters, not as its placeholder
+            if (isHead && headLen > MB_HEADING_MAX_CHARS) {
+                logFn('⚠ A ' + (ev.size / 2) + ' pt paragraph is too long to be a heading (' + headLen + ' characters) – kept as body text: "' + ev.text.slice(0, 40) + '…"', 'warn');
                 paras.push({ text: ev.text, bold: false, blank: false, isMedia: false, isBullet: ev.list }); stats.body++; pendingHead = false; continue;
             }
             if (isHead) { setHeading(ev.text, ev.size >= MB_BAR_MIN_HALFPT ? 'bar' : 'sub'); continue; }
@@ -3018,7 +3208,7 @@
         try{
             let mcqPrepared=await inlineMcqMathAsText(await uploadedDocxFile.arrayBuffer());
             if (getProcessingMode() === 'masterbook') mcqPrepared = await inlineSimpleMathAsText(mcqPrepared);
-            const tokenized=await tokenizeMathInDocx(mcqPrepared);
+            const tokenized=await tokenizeMathInDocx(mcqPrepared, getProcessingMode() === 'masterbook');
             const arrayBuffer=tokenized.arrayBuffer;
             setProgress(10,'Extracting paragraphs, bolding, and media…');
             
@@ -3056,7 +3246,7 @@
                 if (unplaced.skip) log('ℹ ' + unplaced.skip + ' equation(s) belong to skipped sections (model test / নিজেকে যাচাই করি) and are not used.', 'ok');
             }
             let inlinedMath = 0;
-            if (masterBook) inlinedMath = mbInlineMathInQuestionZones(paras, tokenized.tokenMap);
+            if (masterBook) inlinedMath = mbInlineMathInQuestionZones(paras, tokenized.tokenMap) + mbExpandTableMath(paras, tokenized.tokenMap);
             const restoredMath=restoreMathTokensInParas(paras,tokenized.tokenMap) + inlinedMath;
             let expectedMath=Object.keys(tokenized.tokenMap).length;
             if (masterBook) expectedMath -= (unplaced.boxes + unplaced.skip);
@@ -3734,6 +3924,7 @@
                     let opt2Ans = (lcRow['options_2_answer'] || lcRow['option_2_answer'] || '').trim();
                     let opt3Ans = (lcRow['options_3_answer'] || lcRow['option_3_answer'] || '').trim();
                     let opt4Ans = (lcRow['options_4_answer'] || lcRow['option_4_answer'] || '').trim();
+                    let opt5Ans = (lcRow['options_5_answer'] || lcRow['option_5_answer'] || '').trim();
 
                     let checkCorrect = (val) => {
                         if(!val) return false;
@@ -3752,7 +3943,8 @@
                             { text: opt1Ans, image: (lcRow['options_1_image'] || '').trim(), correct: checkCorrect(lcRow['options_1_is_correct'] || lcRow['option_1_is_correct']) },
                             { text: opt2Ans, image: (lcRow['options_2_image'] || '').trim(), correct: checkCorrect(lcRow['options_2_is_correct'] || lcRow['option_2_is_correct']) },
                             { text: opt3Ans, image: (lcRow['options_3_image'] || '').trim(), correct: checkCorrect(lcRow['options_3_is_correct'] || lcRow['option_3_is_correct']) },
-                            { text: opt4Ans, image: (lcRow['options_4_image'] || '').trim(), correct: checkCorrect(lcRow['options_4_is_correct'] || lcRow['option_4_is_correct']) }
+                            { text: opt4Ans, image: (lcRow['options_4_image'] || '').trim(), correct: checkCorrect(lcRow['options_4_is_correct'] || lcRow['option_4_is_correct']) },
+                            { text: opt5Ans, image: (lcRow['options_5_image'] || '').trim(), correct: checkCorrect(lcRow['options_5_is_correct'] || lcRow['option_5_is_correct']) }
                         ]
                     });
                 }
@@ -3875,10 +4067,10 @@
                 const hasMark = x => typeof x === 'string' && MX_ANY_RE.test(x);
                 if (!(hasMark(t) || (Array.isArray(t) && t.some(r => r && hasMark(r.text))))) return t;
                 const baseSize = (o && o.fontSize) || 18;
-                const mathify = (txt, size) => txt.replace(MX_MATH_RE, (m, b64) => {
+                const mathify = (txt, size, col) => txt.replace(MX_MATH_RE, (m, b64) => {
                     const info = mxInfo(b64);
                     const marker = `__MATHINLINE_${mathInjections.length + 1}__`;
-                    mathInjections.push({ slideIndex: slide._mathSlideIndex, marker, omml: convertOmmlForPptx(`<m:oMath>${info.inner}</m:oMath>`, size * 100), fallbackText: info.plain, fontSizeHundredths: size * 100 });
+                    mathInjections.push({ slideIndex: slide._mathSlideIndex, marker, omml: convertOmmlForPptx(`<m:oMath>${info.inner}</m:oMath>`, size * 100, col), fallbackText: info.plain, fontSizeHundredths: size * 100, color: col });
                     return marker;
                 });
                 const runs = Array.isArray(t) ? t : [{ text: t, options: {} }];
@@ -3886,7 +4078,7 @@
                 for (const r of runs) {
                     if (!r || typeof r.text !== 'string' || !MX_ANY_RE.test(r.text)) { out.push(r); continue; }
                     const ro = r.options || {};
-                    const txt = mathify(r.text, ro.fontSize || baseSize);
+                    const txt = mathify(r.text, ro.fontSize || baseSize, String(ro.color || (o && o.color) || BODY_COLOR || 'FFFFFF').replace('#', ''));
                     const parts = txt.split(/([\uE000\uE001])/);
                     let bold = false; const segs = [];
                     for (const p of parts) {
@@ -3906,7 +4098,7 @@
             }
 
             // Mixed text + native math is rendered as ONE PowerPoint text box.
-            function queueInlineMathData(slide,data,fontSize){
+            function queueInlineMathData(slide,data,fontSize,col){
                 const sourceLines=Array.isArray(data?.lines)&&data.lines.length?data.lines:[[{type:'math',content:''}]];
                 const outLines=[];
                 for(const raw of sourceLines){
@@ -3917,7 +4109,8 @@
                         else if(seg.type==='math'){
                             const marker=`__MATHINLINE_${mathInjections.length+1}__`;
                             const inner=String(seg.content||'');
-                            mathInjections.push({slideIndex:slide._mathSlideIndex,marker,omml:convertOmmlForPptx(`<m:oMath>${inner}</m:oMath>`,fontSize*100),fallbackText:ommlToPlainTextFallback(`<m:oMathPara><m:oMath>${inner}</m:oMath></m:oMathPara>`),fontSizeHundredths:fontSize*100});
+                            const fs2=mathFitSize(inner,fontSize,bW);
+                            mathInjections.push({slideIndex:slide._mathSlideIndex,marker,omml:convertOmmlForPptx(`<m:oMath>${inner}</m:oMath>`,fs2*100,col),fallbackText:ommlToPlainTextFallback(`<m:oMathPara><m:oMath>${inner}</m:oMath></m:oMathPara>`),fontSizeHundredths:fs2*100,color:col});
                             out+=marker;
                         }
                     }
@@ -3927,7 +4120,7 @@
                 return outLines;
             }
             function renderInlineMathTextBox(slide,data,startY,fontSize){
-                const lines=queueInlineMathData(slide,data,fontSize); if(!lines.length)return 0;
+                const lines=queueInlineMathData(slide,data,fontSize,BODY_COLOR); if(!lines.length)return 0;
                 // Same 130% line spacing as every other Bangla body line, and no RTL
                 // paragraph mode / autofit, so mixed text+math lines look exactly like
                 // the normal text lines around them.
@@ -3938,20 +4131,30 @@
                     const segs=Array.isArray(line)?line:[];
                     if(!segs.length)return;
                     const plain=segs.map(sg=>sg&&sg.type==='math'?'অঅঅঅঅ':String(sg?.content||'')).join('');
+                    const hasMath=segs.some(sg=>sg&&sg.type==='math');
                     const structured=segs.some(sg=>sg&&sg.type==='math'&&structuredRe.test(String(sg.content||'')));
-                    h+=estHeight(plain||' ',bW,fontSize,1.3,false)+(structured?0.4:0);
+                    // lines that hold an equation use single line spacing (130% on top of an equation's own height left big gaps)
+                    h+=mathLineH(segs,fontSize,bW);
                 });
                 h=Math.max(0.6,h);
-                slide.addText(lines.join('\n'),{x:bX,y:startY,w:bW,h,fontSize,fontFace:'Kalpurush',color:BODY_COLOR,align:'left',valign:'top',margin:0,wrap:true,lineSpacingMultiple:1.3,paraSpaceAfterPt:0,charSpacing:0});
+                const runs=lines.map((ln,i)=>({text:ln,options:{breakLine:i<lines.length-1,lineSpacingMultiple:/__MATHINLINE_\d+__/.test(ln)?1.0:1.3,paraSpaceBefore:0,paraSpaceAfter:0}}));
+                slide.addText(runs,{x:bX,y:startY,w:bW,h,fontSize,fontFace:'Kalpurush',color:BODY_COLOR,align:'left',valign:'top',margin:0,wrap:true,lineSpacingMultiple:1.3,paraSpaceAfterPt:0,charSpacing:0});
                 return h;
+            }
+            function legacyMathLayout(omml,size){
+                const rows=[...String(omml).matchAll(/<m:oMath\b[^>]*>([\s\S]*?)<\/m:oMath>/g)].map(x=>x[1]);
+                if(!rows.length)rows.push(omml);
+                let sz=size; for(const r of rows)sz=Math.min(sz,mathFitSize(r,size,bW));
+                let h=0.08; for(const r of rows)h+=Math.max(0.42,ommlMetrics(r).h*sz/72*1.12)+0.04;
+                return {h,size:sz};
             }
             function renderMathBlock(slide,base64Omml,startY){
                 const omml=decodeURIComponent(escape(atob(base64Omml)));
                 const marker=`__MATH_PLACEHOLDER_${mathInjections.length+1}__`;
-                const lineCount=Math.max(1,(omml.match(/<m:oMath\b/g)||[]).length);
-                const mathH=Math.max(0.9,lineCount*0.62+0.3);
+                const lg=legacyMathLayout(omml,bSzMax);
+                const mathH=lg.h;
                 slide.addText(marker,{x:bX,y:startY,w:bW,h:mathH,fontSize:bSzMax,fontFace:'Kalpurush',color:BODY_COLOR,align:'left',valign:'top',wrap:true,margin:0});
-                mathInjections.push({slideIndex:slide._mathSlideIndex,marker,omml:convertOmmlForPptx(omml,bSzMax*100),fallbackText:ommlToPlainTextFallback(omml),x:bX,y:startY,w:bW,h:mathH});
+                mathInjections.push({slideIndex:slide._mathSlideIndex,marker,omml:convertOmmlForPptx(omml,lg.size*100,BODY_COLOR),fallbackText:ommlToPlainTextFallback(omml),color:BODY_COLOR,x:bX,y:startY,w:bW,h:mathH});
                 return mathH;
             }
             function pngRatio(b64){
@@ -3969,15 +4172,16 @@
             function fitImage(base64,maxH){
                 const r=pngRatio(base64);
                 const capH=Math.max(1.2,Math.min(IMG_MAX_H,maxH||IMG_MAX_H));
-                let w=IMG_MAX_W, h=w/r;
+                const maxWi=r>=4?bW:IMG_MAX_W;   // a wide strip (a question written as a picture) may use the full text width
+                let w=maxWi, h=w/r;
                 if(h>capH){h=capH;w=h*r;}
-                if(w>IMG_MAX_W){w=IMG_MAX_W;h=w/r;}
+                if(w>maxWi){w=maxWi;h=w/r;}
                 return {w,h};
             }
             function renderImageBlock(slide,base64,startY,maxH){
                 const avail=maxH||Math.max(1.2,Math.min(IMG_MAX_H,slideBottomLimit-startY));
                 const {w,h}=fitImage(base64,avail);
-                slide.addImage({data:base64,x:bX+bW-w,y:startY,w,h});
+                slide.addImage({data:base64,x:(w>IMG_MAX_W+0.01?bX:bX+bW-w),y:startY,w,h});
                 return h;
             }
 
@@ -3990,6 +4194,16 @@
                 const rowSpan = row => row.reduce((sum, c) => sum + (c.colspan || 1), 0);
                 const numCols = Math.max(1, ...tableData.map(rowSpan));
                 const colWidth = bW / numCols;
+                // column widths follow the amount of text each column holds (a column with only a star or a dash stays narrow)
+                const colWs = (() => {
+                    const sc = Array(numCols).fill(6);
+                    tableData.forEach(row => { let ci = 0; for (const cell of row) { const span = cell.colspan || 1; if (span === 1) { const t = mxPlain(String(cell.text == null ? '' : cell.text)); const longest = Math.max(0, ...t.split('\n').map(l => l.length)); sc[ci] = Math.max(sc[ci], Math.min(70, Math.sqrt(t.length) * 5, 14 + longest * 0.9)); } ci += span; } });
+                    const minW = Math.min(1.2, bW / numCols), tot = sc.reduce((a, b) => a + b, 0);
+                    let ws = sc.map(v => Math.max(minW, bW * v / tot));
+                    const sum = ws.reduce((a, b) => a + b, 0); ws = ws.map(v => v * bW / sum);
+                    return ws;
+                })();
+                const spanW = (row, idx) => { let ci = 0; for (let k = 0; k < idx; k++) ci += row[k].colspan || 1; let w = 0; for (let k = 0; k < (row[idx].colspan || 1); k++) w += colWs[Math.min(numCols - 1, ci + k)]; return w; };
                 // Defensive normalization: PptxGenJS derives the WHOLE table's
                 // column-grid width from the colspans of its first row only, so
                 // if any other row's colspans don't sum to exactly `numCols` the
@@ -4045,8 +4259,9 @@
                 const CELL_MARGIN_LR = 0.2;
                 const rowHeight = (row) => {
                     let maxH = 0.35;
-                    for (const cell of row) {
-                        const w = Math.max(0.3, colWidth * (cell.colspan || 1) - CELL_MARGIN_LR);
+                    for (let ci = 0; ci < row.length; ci++) {
+                        const cell = row[ci];
+                        const w = Math.max(0.3, spanW(row, ci) - CELL_MARGIN_LR);
                         let h = estHeight(String(cell.text == null ? '' : cell.text), w, TABLE_FONT_SIZE, 1.2, true, TABLE_SAFETY);
                         maxH = Math.max(maxH, h);
                     }
@@ -4059,8 +4274,10 @@
                 const headerHeight = headerRow ? rowHeight(headerRow) : 0;
                 const bodyRowsData = headerRow ? tableData.slice(1) : tableData;
 
-                const makeCells = (row, isHeader) => row.map(cell => ({
-                    text: String(cell.text == null ? '' : cell.text),
+                const makeCells = (row, isHeader, sl) => row.map(cell => ({
+                    text: (sl && MX_ANY_RE.test(String(cell.text == null ? '' : cell.text)))
+                        ? mxExpand(sl, [{ text: String(cell.text), options: { fontSize: TABLE_FONT_SIZE, fontFace: 'Kalpurush', color: BODY_COLOR, bold: isHeader } }], { fontSize: TABLE_FONT_SIZE, color: BODY_COLOR })
+                        : String(cell.text == null ? '' : cell.text),
                     options: {
                         fontSize: TABLE_FONT_SIZE,
                         fontFace: "Kalpurush",
@@ -4112,7 +4329,7 @@
                         expandedBodyRows.push(r);
                         continue;
                     }
-                    const cellChunks = r.map(cell => splitCellIntoChunks(cell.text, Math.max(0.3, colWidth * (cell.colspan || 1) - CELL_MARGIN_LR), freshPageBudget));
+                    const cellChunks = r.map((cell, ci) => splitCellIntoChunks(cell.text, Math.max(0.3, spanW(r, ci) - CELL_MARGIN_LR), freshPageBudget));
                     const maxChunks = Math.max(1, ...cellChunks.map(c => c.length));
                     for (let i = 0; i < maxChunks; i++) {
                         expandedBodyRows.push(r.map((cell, ci) => ({ text: cellChunks[ci][i] || '', colspan: cell.colspan || 1 })));
@@ -4151,8 +4368,8 @@
                     }
 
                     const pptxTableData = headerRow
-                        ? [makeCells(headerRow, true), ...pageRows.map(r => makeCells(r, false))]
-                        : pageRows.map(r => makeCells(r, false));
+                        ? [makeCells(headerRow, true, pageSlide), ...pageRows.map(r => makeCells(r, false, pageSlide))]
+                        : pageRows.map(r => makeCells(r, false, pageSlide));
 
                     // THE actual root cause of the leak: PptxGenJS's table
                     // builder sizes a table's own OUTER FRAME (the <p:xfrm>
@@ -4172,14 +4389,14 @@
                     // content, which is exactly the "leaking past the slide"
                     // behavior. Passing explicit w/h here makes the frame match
                     // the real table bounds instead of that unrelated default.
-                    const tableW = colWidth * numCols;
+                    const tableW = bW;
                     const tableH = Math.max(0.35, usedHeightForPage(pageRows, headerHeight));
                     pageSlide.addTable(pptxTableData, {
                         x: bX,
                         y: pageStartY,
                         w: tableW,
-                        h: tableH,
-                        colW: Array(numCols).fill(colWidth),
+                        rowH: Array((headerRow ? 1 : 0) + pageRows.length).fill(0.3),   // minimum only: PowerPoint grows every row to fit its own text, so there is no empty space
+                        colW: colWs,
                         border: TABLE_BORDER,
                         color: "FFFFFF",
                         autoPage: false
@@ -4420,14 +4637,33 @@
                         if (item.isMathJson) {
                             const mm=item.rawBodyCol.match(/___MATHJSON:([A-Za-z0-9+/=]+)___/);
                             const md=mm?decodeMathJsonPayload(mm[1]):{lines:[]};
-                            const estimate=Array.isArray(md.lines) ? md.lines.map(line => (Array.isArray(line)?line:[]).map(seg => seg && seg.type==='math' ? '∑' : String(seg?.content||'')).join('')).join('\n') : '∑';
-                            for (let s = bSzMax; s >= bSzMin; s--) {
-                                itemH = safeEstHeight(estimate, bW, s, 1.0, false);
-                                activeSize = s;
-                                if (dynBY + itemH <= slideBottomLimit) break;
+                            const mjLines=(Array.isArray(md.lines)?md.lines:[]).filter(l=>Array.isArray(l)&&l.length);
+                            activeSize = bSzMax;
+                            const mjH=mjLines.map(l=>mathLineH(l,bSzMax,bW));
+                            itemH = 0.1 + mjH.reduce((a,b)=>a+b,0);
+                            if (!item.__mjFit && dynBY + itemH > slideBottomLimit && mjLines.length > 1) {
+                                // too tall for what is left of this slide: put as many lines as fit here, continue the rest on the next slide
+                                let k = 0, acc = 0.1;
+                                while (k < mjLines.length && dynBY + acc + mjH[k] <= slideBottomLimit) { acc += mjH[k]; k++; }
+                                const onFresh = dynBY <= slideStartY + 0.05;
+                                if (k === 0 && !onFresh) {
+                                    flushTextBuf();
+                                    ({ slide, y: dynBY } = startNewSlide());
+                                    slideStartY = dynBY;
+                                    workQueue.unshift(item);
+                                    continue;
+                                }
+                                if (k === 0) k = 1;
+                                if (k < mjLines.length) {
+                                    const enc = d => '___MATHJSON:' + btoa(unescape(encodeURIComponent(JSON.stringify(d)))) + '___';
+                                    workQueue.unshift(Object.assign({}, item, { rawBodyCol: enc(Object.assign({}, md, { lines: mjLines.slice(k) })), __mjFit: false }));
+                                    workQueue.unshift(Object.assign({}, item, { rawBodyCol: enc(Object.assign({}, md, { lines: mjLines.slice(0, k) })), __mjFit: true }));
+                                    continue;
+                                }
                             }
                         } else {
-                            itemH = 1.4;
+                            const mm2=item.rawBodyCol.match(/___MATH:([\s\S]*)___/);
+                            try{ itemH = mm2 ? legacyMathLayout(decodeURIComponent(escape(atob(mm2[1]))),bSzMax).h : 1.4; }catch(_){ itemH = 1.4; }
                         }
                     } else if (isImage) {
                         const mi=body.match(/___IMAGE:([\s\S]*)___/);
@@ -4534,9 +4770,9 @@
                             }
                         } else {
                             const match = body.match(/___MATH:([\s\S]*)___/);
-                            if (match) renderMathBlock(slide, match[1], dynBY);
+                            if (match) actualH = renderMathBlock(slide, match[1], dynBY);
                         }
-                        dynBY += (actualH || itemH || 0.8) + 0.15;
+                        dynBY += (actualH || itemH || 0.8) + 0.1;
                     } else {
                         if (textBufY === null) textBufY = dynBY;
                         textBufH += itemH + 0.15;
@@ -4678,7 +4914,27 @@
                             const match = decodedCQBody.match(/___MATHJSON:([A-Za-z0-9+/=]+)___/);
                             if (match) {
                                 const cqTitleH = rowTextT ? estHeight(rowTextT, tW, tSz, 1.2, false) : 0;
-                                renderInlineMathTextBox(slide, decodeMathJsonPayload(match[1]), rowTextT ? Math.max(bY, mediaTitleY + cqTitleH + 0.12) : bY, bSzMax);
+                                // long answers are split over as many slides as they need (same heading on each)
+                                const mjAll = decodeMathJsonPayload(match[1]);
+                                const mjLines = (Array.isArray(mjAll.lines) ? mjAll.lines : []).filter(l => Array.isArray(l) && l.length);
+                                const mjH = mjLines.map(l => mathLineH(l, bSzMax, bW));
+                                let y0 = rowTextT ? Math.max(bY, mediaTitleY + cqTitleH + 0.12) : bY, sl = slide, k = 0;
+                                while (k < mjLines.length) {
+                                    let acc = 0.1, n = 0;
+                                    while (k + n < mjLines.length && (n === 0 || y0 + acc + mjH[k + n] <= slideBottomLimit)) { acc += mjH[k + n]; n++; }
+                                    renderInlineMathTextBox(sl, Object.assign({}, mjAll, { lines: mjLines.slice(k, k + n) }), y0, bSzMax);
+                                    k += n;
+                                    if (k < mjLines.length) {
+                                        sl = createBaseSlide();
+                                        if (CQF) { cqCtx = true; drawCQTag(sl); }
+                                        y0 = bY;
+                                        if (rowTextT) {
+                                            const tH2 = estHeight(rowTextT, tW, tSz, 1.2, false);
+                                            sl.addText(rowTextT, { x: tX, y: tY, w: tW, h: tH2, fontSize: tSz, fontFace: HEAD_FACE, color: HEAD_COLOR, bold: true, valign: 'top', lineSpacingMultiple: 1.2 });
+                                            y0 = Math.max(bY, tY + tH2 + 0.12);
+                                        }
+                                    }
+                                }
                             }
                         } else {
                             const match = decodedCQBody.match(/___MATH:([\s\S]*)___/);
@@ -5020,7 +5276,7 @@
                 log(`--- Generating MCQ Slides ---`, 'info');
                 const labelFormatEl = document.querySelector('input[name="labelFormat"]:checked');
                 const labelFormat = labelFormatEl ? labelFormatEl.value : 'bengali';
-                const labels = labelFormat === 'english' ? ['A', 'B', 'C', 'D'] : ['ক', 'খ', 'গ', 'ঘ'];
+                const labels = labelFormat === 'english' ? ['A', 'B', 'C', 'D', 'E'] : ['ক', 'খ', 'গ', 'ঘ', 'ঙ'];
 
                 for (let i = 0; i < parsedMCQQuizzes.length; i++) {
                     const quiz = parsedMCQQuizzes[i];
@@ -5147,7 +5403,7 @@
                             let qBoxH = Math.max(0.6, qEst);
                             
                             let maxTextLen = 0;
-                            for (let j = 0; j < 4; j++) {
+                            for (let j = 0; j < quiz.options.length; j++) {
                                 if (quiz.options[j].text) {
                                     maxTextLen = Math.max(maxTextLen, mxVis(`${labels[j]}. ${quiz.options[j].text}`).length);
                                 }
@@ -5157,7 +5413,7 @@
                             let optW = quiz.image ? 3.3 : Math.max(3.3, Math.min(bW, estimatedW));
                             
                             let uniformOptH = 0.6;
-                            for (let j = 0; j < 4; j++) {
+                            for (let j = 0; j < quiz.options.length; j++) {
                                 if (quiz.options[j].text) {
                                     uniformOptH = Math.max(uniformOptH, estHeight(`${labels[j]}. ${quiz.options[j].text}`, optW - 0.4, s, 1.2, true));
                                 }
@@ -5223,7 +5479,7 @@
                             currentY += finalBoardH + mcqGap; 
                         }
 
-                        for (let j = 0; j < 4; j++) {
+                        for (let j = 0; j < quiz.options.length; j++) {
                             let opt = quiz.options[j];
                             if (!opt.text) continue;
                             let isCorrect = opt.correct && showAnswer;
@@ -5247,7 +5503,7 @@
                         const M = TPL && TPL.profile.mcq;
                         const qNumText = 'MCQ-' + (i + 1).toString().padStart(2, '0');
                         const boxX = M ? M.question.x : bX, boxW = M ? M.question.w : bW, boxY = M ? M.question.y : mcqY;
-                        const maxSz = Math.min(M ? M.question.size : bSzMax, bSzMax), minSz = 14;
+                        const EXPL_SZ = 24;                       // explanation text is always 24 pt; a long explanation continues on the next slide
                         const avail = slideBottomLimit - boxY;
                         const newSlide = () => {
                             const sl = createBaseSlide('mcq');
@@ -5256,20 +5512,25 @@
                         };
                         let rest = (quiz.explLines || []).slice();
                         let lastBottom = boxY, lastSlide = null;
+                        const GREEN = (M && M.options && M.options.correctFill) || '11FF7D';     // only the word "ব্যাখ্যা" is green
+                        const TXT = (M && M.options && M.options.color) || BODY_COLOR || 'FFFFFF';
+                        const fitsArr = arr => estHeight('ব্যাখ্যা\n' + arr.join('\n'), boxW - 0.4, EXPL_SZ, 1.15, true) <= avail;
                         while (rest.length) {
-                            let sz = maxSz, chunk;
-                            const fits = (arr, z) => estHeight('ব্যাখ্যা\n' + arr.join('\n'), boxW - 0.4, z, 1.15, true) <= avail;
-                            for (sz = maxSz; sz >= minSz; sz--) if (fits(rest, sz)) break;
-                            if (fits(rest, Math.max(sz, minSz))) { chunk = rest; rest = []; sz = Math.max(sz, minSz); }
-                            else { sz = minSz; chunk = []; while (rest.length && (chunk.length === 0 || fits([...chunk, rest[0]], sz))) chunk.push(rest.shift()); }
-                            const h = Math.min(avail, Math.max(0.8, estHeight('ব্যাখ্যা\n' + chunk.join('\n'), boxW - 0.4, sz, 1.15, true)));
+                            let chunk = [];
+                            while (rest.length && fitsArr([...chunk, rest[0]])) chunk.push(rest.shift());
+                            if (!chunk.length) {   // one line taller than a whole slide: cut it at a word boundary
+                                const words = rest[0].split(/(\s+)/); let k = words.length;
+                                while (k > 1 && !fitsArr([words.slice(0, k).join('')])) k--;
+                                chunk = [words.slice(0, k).join('').trimEnd()];
+                                const remain = words.slice(k).join('').trimStart();
+                                if (remain) rest[0] = remain; else rest.shift();
+                            }
+                            const h = Math.min(avail, Math.max(0.8, estHeight('ব্যাখ্যা\n' + chunk.join('\n'), boxW - 0.4, EXPL_SZ, 1.15, true)));
                             const sl = newSlide();
-                            // plain text in the template's green (the colour of the correct option) – no box
-                            const GREEN = (M && M.options && M.options.correctFill) || '11FF7D';
                             sl.addText([
-                                { text: 'ব্যাখ্যা', options: { bold: true, breakLine: true, fontSize: sz } },
-                                { text: chunk.join('\n'), options: { fontSize: sz } }
-                            ], { color: GREEN, fontSize: sz, x: boxX, y: boxY, w: boxW, h,
+                                { text: 'ব্যাখ্যা', options: { bold: true, breakLine: true, fontSize: EXPL_SZ, color: GREEN } },
+                                { text: chunk.join('\n'), options: { fontSize: EXPL_SZ, color: TXT } }
+                            ], { color: TXT, fontSize: EXPL_SZ, x: boxX, y: boxY, w: boxW, h,
                                  align: 'left', valign: 'top', margin: 0, fontFace: 'Kalpurush', wrap: true, lineSpacingMultiple: 1.15 });
                             lastSlide = sl; lastBottom = boxY + h;
                             processedCount++;
